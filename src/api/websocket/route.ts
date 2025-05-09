@@ -17,7 +17,7 @@ export async function GET(req: Request) {
 
   try {
     // Set up real-time subscription
-    const channel = supabase
+    supabase
       .channel('canvas')
       .on('broadcast', { event: 'draw' }, (payload) => {
         // Handle drawing events

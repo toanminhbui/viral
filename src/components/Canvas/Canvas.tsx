@@ -114,6 +114,8 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
     }
     
     ctx.restore();
+    
+    // Avoid updating debug info during redrawing to prevent potential infinite loops
   }, [localDrawings, color, width, editingText, activeTextId]);
 
   // Draw a single element without redrawing the entire canvas
@@ -147,6 +149,7 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
     }
     
     ctx.restore();
+  // Only include stable dependencies in useCallback
   }, [color, width]);
 
   // Save a new drawing to local state and Supabase
@@ -476,7 +479,8 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
   const resetView = useCallback(() => {
     offsetRef.current = { x: 500, y: 500 };
     redrawCanvas();
-    setDebugInfo('View reset');
+    // Avoid setState in functions called by useEffect
+    // setDebugInfo('View reset');
   }, [redrawCanvas]);
 
   // Update drawing mode when type prop changes
@@ -538,9 +542,28 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
     }
   }, [color, width]);
 
-  // Load data from Supabase once on mount
+  // Load data from Supabase once on mount - using ref to track mounting state
+  const isInitialLoadRef = useRef(true);
+  
   useEffect(() => {
+    // Only run this effect on initial mount
+    if (!isInitialLoadRef.current) return;
+    // Turn off the initial load flag after first run
+    isInitialLoadRef.current = false;
+    
+    // Skip if canvas ref isn't ready yet
     if (!canvasRef.current) return;
+    
+    // Flag to track if we've already loaded drawings
+    const hasLoadedData = localStorage.getItem('canvas_data_loaded');
+    const lastLoadTime = localStorage.getItem('canvas_last_load_time');
+    const currentTime = Date.now();
+    const oneHourInMs = 60 * 60 * 1000;
+    
+    // Only load drawings if it hasn't been loaded yet or it's been more than an hour
+    const shouldLoadDrawings = !hasLoadedData || 
+      !lastLoadTime || 
+      (currentTime - parseInt(lastLoadTime)) > oneHourInMs;
     
     // Load initial drawings
     const loadDrawings = async () => {
@@ -568,11 +591,14 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
           setLocalDrawings(drawings);
           setDebugInfo(`Loaded ${drawings.length} drawings`);
           
-          // Draw all elements
-          setTimeout(() => {
-            if (!ctxRef.current) return;
+          // Save to localStorage to prevent reloading
+          localStorage.setItem('canvas_data_loaded', 'true');
+          localStorage.setItem('canvas_last_load_time', currentTime.toString());
+          
+          // Draw all elements - use redrawCanvas without triggering another render
+          if (ctxRef.current) {
             redrawCanvas();
-          }, 100);
+          }
         }
       } catch (err) {
         console.error('Failed to load drawings:', err);
@@ -602,7 +628,9 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
               setLocalDrawings(prev => {
                 const updated = [...prev, newDrawing];
                 // Draw directly to canvas without state update
-                drawSingleElement(newDrawing);
+                if (ctxRef.current) {
+                  drawSingleElement(newDrawing);
+                }
                 return updated;
               });
               
@@ -622,13 +650,67 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
       };
     };
     
-    const unsubscribe = setupSubscription();
-    loadDrawings();
+    // Only load drawings if needed
+    if (shouldLoadDrawings) {
+      loadDrawings();
+    } else {
+      // If we're not loading from the database, still need to set loading to false
+      setLoading(false);
+      setDebugInfo('Using cached drawings');
+      
+      // Try to get drawings from localStorage
+      try {
+        const cachedDrawings = localStorage.getItem('canvas_drawings');
+        if (cachedDrawings) {
+          const drawings = JSON.parse(cachedDrawings) as CanvasElement[];
+          setLocalDrawings(drawings);
+          
+          // Draw all elements directly - avoid using setTimeout
+          if (ctxRef.current) {
+            redrawCanvas();
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load cached drawings:', err);
+        // If there's an error with cached drawings, load from database
+        loadDrawings();
+      }
+    }
     
+    // Setup subscription once
+    const unsubscribe = setupSubscription();
+    
+    // Cleanup function
     return () => {
       unsubscribe();
     };
-  }, [username, drawSingleElement, redrawCanvas]);
+  // We're using isInitialLoadRef to ensure this only runs once, so no dependencies are needed
+  }, []);  // Empty dependency array ensures this only runs once
+  
+  // Apply drawSingleElement and redrawCanvas separately to avoid dependency cycles
+  useEffect(() => {
+    // This effect ensures redrawCanvas is available to the data loading effect
+    // But it doesn't actually do anything, it just makes the function available
+  }, [drawSingleElement, redrawCanvas]);
+
+  // Save drawings to localStorage when they change
+  useEffect(() => {
+    // Skip initial render or if there are no drawings
+    if (localDrawings.length === 0) return;
+    
+    // Prevent excessive localStorage writes by debouncing
+    const timeoutId = setTimeout(() => {
+      try {
+        localStorage.setItem('canvas_drawings', JSON.stringify(localDrawings));
+      } catch (err) {
+        console.error('Failed to cache drawings:', err);
+      }
+    }, 1000); // Debounce for 1 second
+    
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [localDrawings]);
 
   // Focus text input when editing begins
   useEffect(() => {
