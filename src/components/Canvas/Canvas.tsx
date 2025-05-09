@@ -119,7 +119,7 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
   }, [localDrawings, color, width, editingText, activeTextId]);
 
   // Draw a single element without redrawing the entire canvas
-  const drawSingleElement = useCallback((element: CanvasElement) => {
+  useCallback((element: CanvasElement) => {
     const ctx = ctxRef.current;
     if (!ctx) return;
     
