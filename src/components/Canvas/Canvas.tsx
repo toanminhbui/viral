@@ -28,6 +28,7 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
   const [loading, setLoading] = useState(false);
   const [localDrawings, setLocalDrawings] = useState<CanvasElement[]>([]);
   const [connectedUsers, setConnectedUsers] = useState<string[]>([]);
+  const [allUsers, setAllUsers] = useState<string[]>([]);  // New state for all registered users
   const [debugInfo, setDebugInfo] = useState<string>('');
   
   // Text editing state
@@ -119,7 +120,7 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
   }, [localDrawings, color, width, editingText, activeTextId]);
 
   // Draw a single element without redrawing the entire canvas
-  useCallback((element: CanvasElement) => {
+  const drawSingleElement = useCallback((element: CanvasElement) => {
     const ctx = ctxRef.current;
     if (!ctx) return;
     
@@ -547,6 +548,29 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
   // Counter for polling to track debug info
   const pollCountRef = useRef(0);
   
+  // Function to load all registered users from database
+  const loadAllUsers = useCallback(async () => {
+    try {
+      console.log('Loading all users...');
+      
+      // Get unique user IDs from canvas_elements
+      const { data, error } = await supabase
+        .from('canvas_elements')
+        .select('user_id');
+        
+      if (error) {
+        console.error('Error loading users:', error);
+      } else if (data) {
+        // Extract unique user IDs
+        const uniqueUsers = Array.from(new Set(data.map(item => item.user_id)));
+        setAllUsers(uniqueUsers);
+        console.log(`Loaded ${uniqueUsers.length} users`);
+      }
+    } catch (err) {
+      console.error('Failed to load users:', err);
+    }
+  }, []);
+  
   // Poll for new drawings from database at regular intervals
   useEffect(() => {
     // Skip if canvas ref isn't ready yet
@@ -577,13 +601,17 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
             timestamp: item.timestamp
           }));
           
+          // Extract unique user IDs
+          const uniqueUsers = Array.from(new Set(data.map(item => item.user_id)));
+          setAllUsers(uniqueUsers);
+          
           // Update state without triggering dependency loops
           setLocalDrawings(drawings);
           
           if (isInitialLoadRef.current) {
-            console.log(`Loaded ${drawings.length} drawings`);
+            console.log(`Loaded ${drawings.length} drawings from ${uniqueUsers.length} users`);
             // Only update UI debug info on initial load
-            setDebugInfo(`Loaded ${drawings.length} drawings`);
+            setDebugInfo(`Loaded ${drawings.length} drawings from ${uniqueUsers.length} users`);
             isInitialLoadRef.current = false;
           } else {
             pollCountRef.current += 1;
@@ -705,6 +733,13 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
                   ? prev 
                   : [...prev, newDrawing.userId]
               );
+              
+              // Add to all users if not already there
+              setAllUsers(prev => 
+                prev.includes(newDrawing.userId)
+                  ? prev
+                  : [...prev, newDrawing.userId]
+              );
             }
           }
         )
@@ -770,6 +805,20 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
     };
   }, [editingText]);
 
+  // Load all users initially and periodically
+  useEffect(() => {
+    // Initial load
+    loadAllUsers();
+    
+    // Refresh every minute
+    const interval = setInterval(() => {
+      loadAllUsers();
+    }, 60000);
+    
+    // Cleanup
+    return () => clearInterval(interval);
+  }, [loadAllUsers]);
+
   if (loading) {
     return <div className="w-full h-full flex items-center justify-center">Loading...</div>;
   }
@@ -788,20 +837,38 @@ export const Canvas: React.FC<CanvasProps> = ({ type, color, width, username }) 
         </button>
       </div>
       
-      {/* Connected users */}
-      {connectedUsers.length > 0 && (
-        <div className="absolute bottom-24 left-2 bg-white p-2 rounded shadow z-20 max-w-xs">
-          <div className="text-xs font-bold mb-1">Connected Users ({connectedUsers.length}):</div>
-          <div className="max-h-24 overflow-y-auto">
-            {connectedUsers.map(user => (
-              <div key={user} className="text-xs flex items-center gap-1 py-0.5">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                {user}
-              </div>
-            ))}
+      {/* Users panel */}
+      <div className="absolute bottom-24 left-2 bg-white p-2 rounded shadow z-20 max-w-xs">
+        {/* Active users section */}
+        {connectedUsers.length > 0 && (
+          <div className="mb-3">
+            <div className="text-xs font-bold mb-1">Active Users ({connectedUsers.length}):</div>
+            <div className="max-h-24 overflow-y-auto">
+              {connectedUsers.map(user => (
+                <div key={user} className="text-xs flex items-center gap-1 py-0.5">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  {user}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+        
+        {/* All registered users section */}
+        {allUsers.length > 0 && (
+          <div>
+            <div className="text-xs font-bold mb-1">All Registered Users ({allUsers.length}):</div>
+            <div className="max-h-36 overflow-y-auto">
+              {allUsers.map(user => (
+                <div key={user} className="text-xs flex items-center gap-1 py-0.5">
+                  <div className={`w-2 h-2 ${connectedUsers.includes(user) ? 'bg-green-500' : 'bg-gray-300'} rounded-full`}></div>
+                  {user} {user === username && '(you)'}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
       
       {/* Text input for editing */}
       {editingText && textPosition && (
